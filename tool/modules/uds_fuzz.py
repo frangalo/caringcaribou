@@ -29,6 +29,73 @@ def find_duplicates(sequence):
     return duplicates
 
 
+def request_seed_fuzzer(arb_id_request, arb_id_response, session_type, 
+                        reset_type, reset_delay, nostop, sequence):
+    """Fuzz the request of a seed (Security Access). If the response is positive, a sequence have been found""" 
+    for level in range(1, 256, 2):
+        # Reset ECU if reset type has been provided
+        if reset_type:
+            ecu_reset(arb_id_request, arb_id_response, reset_type, None)
+            time.sleep(reset_delay)
+        # Sends the seed request
+        response = request_seed(arb_id_request, arb_id_response, level, None, None)
+        if Iso14229_1.is_positive_response(response):
+            # Prints the sequence found
+            sequence.append("0x27 {}".format(hex(level)))
+            print("Sequence found: {}".format(sequence))
+            print("Seed received: {}".format(response[2:]))
+            sequence.pop()
+            # No stop execution if --nostop or -ns has been supplied
+            if not nostop:
+                exit(0)
+
+
+def session_sequence_fuzzer(arb_id_request, arb_id_response, reset_type, 
+                            reset_delay, nostop, prev_session_types, sequence):
+    """Recursive function to look for the session sequence needed to get the seed"""
+    try:
+        # Fuzz the extended session request (0x10 [0x01-0xFF])
+        for session_type in range(1, 256):
+            if session_type not in prev_session_types:
+                response = extended_session(arb_id_request, arb_id_response, session_type)
+                # If a positive is received, fuzz the seed request and repeat the process to find the sequence
+                if Iso14229_1.is_positive_response(response):
+                    # Save the context information
+                    prev_session_types.add(session_type)
+                    sequence.append("0x10 {}".format(hex(session_type)))
+                    # Tries to find the seed
+                    request_seed_fuzzer(arb_id_request, arb_id_response, session_type, reset_type, reset_delay, nostop, sequence)
+                    session_sequence_fuzzer(arb_id_request, arb_id_response, reset_type, 
+                                            reset_delay, nostop, prev_session_types, sequence)
+                    # Remove last elements
+                    prev_session_types.remove(session_type)
+                    sequence.pop()
+
+    except KeyboardInterrupt:
+        print("Interrupted by user.")
+        exit(1)
+    except Exception as e:
+        print(e)
+        return
+
+
+def __session_sequence_wrapper(args):
+    """Wrapper used to initiate the session sequence fuzzer"""
+    arb_id_request = args.src
+    arb_id_response = args.dst
+    reset_type = args.reset
+    reset_delay = args.delay
+    nostop = args.nostop
+
+    # Set that will save the previous session types (avoid an infinite loop)
+    prev_session_types = set()
+    # List that will save the sequence needed to get a seed
+    sequence = list()
+
+    print("Session sequence fuzzer started. Press Ctrl+C if you need to stop.\n")
+    session_sequence_fuzzer(arb_id_request, arb_id_response, reset_type, reset_delay, nostop, prev_session_types, sequence)
+
+
 def seed_randomness_fuzzer(args):
     """Wrapper used to initiate security randomness fuzzer"""
     arb_id_request = args.src
@@ -215,10 +282,41 @@ def __parse_args(args):
         description="UDS seed randomness fuzzer and tester module for "
                     "CaringCaribou",
         epilog="""Example usage:
+  cc.py uds_fuzz session_sequence_fuzzer 0x733 0x633 -r 1 -d 4 --nostop
   cc.py uds_fuzz seed_randomness_fuzzer 100311022701 0x733 0x633 -d 4 -r 1 -id 2 -m 0
   cc.py uds_fuzz delay_fuzzer 100311022701 0x03 0x733 0x633""")
     subparsers = parser.add_subparsers(dest="module_function")
     subparsers.required = True
+
+    # Parser for Session sequence fuzz testing
+    parser_session_sequence_fuzzer = subparsers.add_parser("session_sequence_fuzzer")
+    parser_session_sequence_fuzzer.add_argument("src",
+                                     type=parse_int_dec_or_hex,
+                                     help="arbitration ID to transmit to")
+    parser_session_sequence_fuzzer.add_argument("dst",
+                                     type=parse_int_dec_or_hex,
+                                     help="arbitration ID to listen to")
+    parser_session_sequence_fuzzer.add_argument("-r", "--reset", metavar="RTYPE", default=None,
+                                     type=parse_int_dec_or_hex,
+                                     help="Enable reset between security seed "
+                                          "requests. Valid RTYPE integers are: "
+                                          "1=hardReset, 2=key off/on, 3=softReset, "
+                                          "4=enable rapid power shutdown, "
+                                          "5=disable rapid power shutdown. "
+                                          "(default: None)")
+    parser_session_sequence_fuzzer.add_argument("-d", "--delay", metavar="D",
+                                     type=float, default=DELAY_SECSEED_RESET,
+                                     help="Wait D seconds between reset and "
+                                           "security seed request. You'll likely "
+                                           "need to increase this when using RTYPE: "
+                                           "1=hardReset. Does nothing if RTYPE "
+                                           "is None. (default: {0})"
+                                     .format(DELAY_FUZZ_RESET))
+    parser_session_sequence_fuzzer.add_argument("-ns", "--nostop",
+                                     action="store_true",
+                                     help="Do not stop execution after the first sequence is found "
+                                           "(search all available sequences)")
+    parser_session_sequence_fuzzer.set_defaults(func=__session_sequence_wrapper)
 
     # Parser for Delay fuzz testing
     parser_delay_fuzzer = subparsers.add_parser("delay_fuzzer")
