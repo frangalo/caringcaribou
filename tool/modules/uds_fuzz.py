@@ -31,8 +31,9 @@ def find_duplicates(sequence):
 
 def request_seed_fuzzer(arb_id_request, arb_id_response, session_type, 
                         reset_type, reset_delay, nostop, sequence):
-    """Fuzz the request of a seed (Security Access). If the response is positive, a sequence have been found"""
-    for level in range(1, 128, 2):
+    """Fuzz the request of a seed (Security Access)"""
+    # Range from 1 to 65 to avoid "Invalid request seed level"
+    for level in range(1, 66, 2):
         # Reset ECU if reset type has been provided
         if reset_type:
             ecu_reset(arb_id_request, arb_id_response, reset_type, None)
@@ -40,7 +41,7 @@ def request_seed_fuzzer(arb_id_request, arb_id_response, session_type,
         # Sends the seed request
         response = request_seed(arb_id_request, arb_id_response, level, None, None)
         # If the response is negative but the code is Response Pending or response is positive, found a sequence
-        if response[2] == NegativeResponseCodes.REQUEST_CORRECTLY_RECEIVED_RESPONSE_PENDING or Iso14229_1.is_positive_response(response):
+        if response is not None and (response[2] == NegativeResponseCodes.REQUEST_CORRECTLY_RECEIVED_RESPONSE_PENDING or Iso14229_1.is_positive_response(response)):
             # Prints the sequence found
             sequence.append("0x27 {}".format(hex(level)))
             print("Sequence found: {}".format(sequence))
