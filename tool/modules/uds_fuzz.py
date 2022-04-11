@@ -1,6 +1,6 @@
 from __future__ import print_function
 from lib.common import list_to_hex_str, parse_int_dec_or_hex, str_to_int_list
-from lib.iso14229_1 import Iso14229_1
+from lib.iso14229_1 import Iso14229_1, NegativeResponseCodes
 from modules.uds import ecu_reset, print_negative_response, request_seed, extended_session
 from sys import stdout
 import argparse
@@ -32,13 +32,17 @@ def find_duplicates(sequence):
 def request_seed_fuzzer(arb_id_request, arb_id_response, session_type, 
                         reset_type, reset_delay, nostop, sequence):
     """Fuzz the request of a seed (Security Access). If the response is positive, a sequence have been found""" 
-    for level in range(1, 256, 2):
+    for level in range(1, 128, 2):
         # Reset ECU if reset type has been provided
         if reset_type:
             ecu_reset(arb_id_request, arb_id_response, reset_type, None)
             time.sleep(reset_delay)
         # Sends the seed request
         response = request_seed(arb_id_request, arb_id_response, level, None, None)
+        # If the response is negative but the code is Response Pending, get the next response
+        if response[2] == NegativeResponseCodes.REQUEST_CORRECTLY_RECEIVED_RESPONSE_PENDING:
+            response = Iso14229_1.receive_response(Iso14229_1.P3_CLIENT)
+        # Check if response is positive
         if Iso14229_1.is_positive_response(response):
             # Prints the sequence found
             sequence.append("0x27 {}".format(hex(level)))
